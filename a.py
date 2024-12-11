@@ -468,7 +468,7 @@ def engine__get_orders(l_ts):
         COUNT(*) AS order_count
     FROM 
         `tabSales Order`
-    WHERE status = "Confirmed"
+    WHERE status = "Confirmed" AND timestamp <= '{l_ts}'
     GROUP BY 
         customer_
     ORDER BY 
