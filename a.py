@@ -204,7 +204,9 @@ def get_available_vehicles_by_plant_and_distance(plant, dp):
 def order__get_available_vehicles(order):
     vehicles = set(TALUKA_VEHICLE_SIZE_MATRIX[order.tehsil]["vehicles"])
     vehicles_by_plant = set(
-        get_available_vehicles_by_plant_and_distance(order["plant"], order["delivery_point"])
+        get_available_vehicles_by_plant_and_distance(
+            order["plant"], order["delivery_point"]
+        )
     )
     return vehicles.intersection(vehicles_by_plant)
 
@@ -329,7 +331,8 @@ def truck__add(order, truck_idx):
     trucks[truck_idx] = truck
 
 
-def truck__check_and_fulfill(truck, l_ts):
+def truck__check_and_fulfill(truck_idx, l_ts):
+    truck = trucks[truck_idx]
     delay = divmod(((l_ts) - (truck["timestamp"])).total_seconds(), 60)[0]
     allowable_vehicles_by_time = []
     for i, j in {
@@ -377,9 +380,8 @@ def truck__check_and_fulfill(truck, l_ts):
     #         "fulfillment_time": l_ts,
     #     },
     # )
-    # TODO
-    # Create "Clubbed Order" with Completed and all sales orders
 
+    tss = []
     for order in truck["orders"]:
         frappe.db.set_value(
             "Sales Order",
@@ -390,12 +392,17 @@ def truck__check_and_fulfill(truck, l_ts):
                 "clubbing_time": l_ts,
             },
         )
+        tss.append(order["timestamp"])
 
-    # TODO  engine_set_truck_timestamp,   set  {
-    #     "timestamp": min_order_time,
-    #     "latest_timestamp": max_order_time,
-    #     "order_count": order_count,
-    # },
+    min_ts = min(tss)  # ts
+    max_ts = max(tss)  # l_ts
+    o_count = len(truck["orders"])
+
+    trucks[truck_idx]["active"] = False
+
+    # TODO
+    # Create "Clubbed Order" with Completed and all sales orders
+
     return True
 
 
@@ -478,116 +485,114 @@ def engine__check_constraints(order, truck):
     return True
 
 
-def engine__fulfill_and_eject(l_ts):
-    global trucks
-    for truck in trucks:
-        truck__check_and_fulfill(truck, l_ts)
-
-
-# TODO    old orders less tha l_ts - 120 mins to unserviceable
 def engine_label_old_orders_to_unserviceable(l_ts):
     orders = engine__get_orders(l_ts)
-    delay_point = frappe.utils.add_to_date(l_ts, minutes= -115)
+    delay_point = frappe.utils.add_to_date(l_ts, minutes=-(HARD_STOP_TIME + 5))
     for customer, sales_orders in orders.items():
         for order in sales_orders:
             timestamp = frappe.utils.get_datetime(order["timestamp"])
             if timestamp < delay_point:
-                frappe.db.set_value("Sales Order", order["name"], {
-                    "status": "Unserviceable",
-                    "is_unserviceable": True,
-                    "unserviceable_remarks": "TIME_LIMIT_EXCEEDED",
-                    "clubbed_order": ""
-                })
+                frappe.db.set_value(
+                    "Sales Order",
+                    order["name"],
+                    {
+                        "status": "Unserviceable",
+                        "is_unserviceable": True,
+                        "unserviceable_remarks": "TIME_LIMIT_EXCEEDED",
+                        "clubbed_order": "",
+                    },
+                )
+
 
 def engine__main(l_ts):
     engine_label_old_orders_to_unserviceable(l_ts)
     sales_orders = engine__get_orders(l_ts)
-    for order in sales_orders:
-        # TODO dp filter here
-        if (
-            order["tehsil"] not in TALUKA_VEHICLE_SIZE_MATRIX
-            or order["district"] not in DISTRICT_CLUBBING_DISTANCE_MATRIX
-            or order["delivery_point"] not in DP_LAT_LNG_MASTER
-        ):
-            frappe.db.set_value(
-                "Sales Order",
-                order["name"],
-                {
-                    "status": "Unserviceable",
-                    "is_unserviceable": True,
-                    "unserviceable_remarks": "DATA_NOT_FOUND_IN_MASTER",
-                    "clubbed_order": "",
-                },
-            )
-            continue
 
-        available_vehicles = order__get_available_vehicles(order)
-        if len(available_vehicles) == 0:
-            frappe.db.set_value(
-                "Sales Order",
-                order["name"],
-                {
-                    "status": "Unserviceable",
-                    "is_unserviceable": True,
-                    "unserviceable_remarks": "NO_ALLOWABLE_VEHICLES",
-                    "clubbed_order": "",
-                },
-            )
-            continue
-
-        mx_weight = VEHICLE_TYPES[max(available_vehicles)]["max"]
-        if order["qty"] > mx_weight:
-            order__split(order, available_vehicles)
-            continue
-
-        global trucks
-
-        if len(trucks) == 0:
-            trucks.append(
-                {
-                    "timestamp": order["timestamp"],
-                    "channel": order["channel"],
-                    "plant": order["plant"],
-                    "available_vehicles": available_vehicles,
-                    "locs": set(),
-                    "tehsils": set(),
-                    "delivery_points": set(),
-                    "customers": set(),
-                    "qty": 0,
-                }
-            )
-            truck__add(order, len(trucks) - 1)
-            continue
-
-        truck_found = False
-        truck_idx = None
-        for idx, truck in enumerate(trucks):
-            if not engine__check_constraints(order, truck):
+    for customer, orders in sales_orders.items():
+        for order in orders:
+            if (
+                order["tehsil"] not in TALUKA_VEHICLE_SIZE_MATRIX
+                or order["district"] not in DISTRICT_CLUBBING_DISTANCE_MATRIX
+                or order["delivery_point"] not in DP_LAT_LNG_MASTER
+            ):
+                frappe.db.set_value(
+                    "Sales Order",
+                    order["name"],
+                    {
+                        "status": "Unserviceable",
+                        "is_unserviceable": True,
+                        "unserviceable_remarks": "DATA_NOT_FOUND_IN_MASTER",
+                        "clubbed_order": "",
+                    },
+                )
                 continue
 
-            truck_found = True
-            truck_idx = idx
-            break
+            available_vehicles = order__get_available_vehicles(order)
+            if len(available_vehicles) == 0:
+                frappe.db.set_value(
+                    "Sales Order",
+                    order["name"],
+                    {
+                        "status": "Unserviceable",
+                        "is_unserviceable": True,
+                        "unserviceable_remarks": "NO_ALLOWABLE_VEHICLES",
+                        "clubbed_order": "",
+                    },
+                )
+                continue
 
-        if not truck_found:
-            trucks.append(
-                {
-                    "timestamp": order["timestamp"],
-                    "channel": order["channel"],
-                    "plant": order["plant"],
-                    "available_vehicles": available_vehicles,
-                    "locs": set(),
-                    "tehsils": set(),
-                    "delivery_points": set(),
-                    "customers": set(),
-                    "qty": 0,
-                }
-            )
-            truck_idx = len(trucks) - 1
+            mx_weight = VEHICLE_TYPES[max(available_vehicles)]["max"]
+            if order["qty"] > mx_weight:
+                order__split(order, available_vehicles)
+                continue
 
-        truck__add(order, truck_idx)
+            global trucks
 
-    engine__fulfill_and_eject(l_ts)
+            if len(trucks) == 0:
+                trucks.append(
+                    {
+                        "timestamp": order["timestamp"],
+                        "channel": order["channel"],
+                        "plant": order["plant"],
+                        "available_vehicles": available_vehicles,
+                        "locs": set(),
+                        "tehsils": set(),
+                        "delivery_points": set(),
+                        "customers": set(),
+                        "qty": 0,
+                    }
+                )
+                truck__add(order, len(trucks) - 1)
+                continue
+
+            truck_found = False
+            truck_idx = None
+            for idx, truck in enumerate(trucks):
+                if not engine__check_constraints(order, truck):
+                    continue
+
+                truck_found = True
+                truck_idx = idx
+                break
+
+            if not truck_found:
+                trucks.append(
+                    {
+                        "timestamp": order["timestamp"],
+                        "channel": order["channel"],
+                        "plant": order["plant"],
+                        "available_vehicles": available_vehicles,
+                        "locs": set(),
+                        "tehsils": set(),
+                        "delivery_points": set(),
+                        "customers": set(),
+                        "qty": 0,
+                    }
+                )
+                truck_idx = len(trucks) - 1
+
+            truck__add(order, truck_idx)
+            truck__check_and_fulfill(truck_idx, l_ts)
 
 
 engine_run_time = frappe.form_dict.l_ts
