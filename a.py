@@ -202,7 +202,7 @@ def get_available_vehicles_by_plant_and_distance(plant, dp):
 
 
 def order__get_available_vehicles(order):
-    vehicles = set(TALUKA_VEHICLE_SIZE_MATRIX[order.tehsil]["vehicles"])
+    vehicles = set(TALUKA_VEHICLE_SIZE_MATRIX[order["tehsil"]]["vehicles"])
     vehicles_by_plant = set(
         get_available_vehicles_by_plant_and_distance(
             order["plant"], order["delivery_point"]
@@ -314,17 +314,11 @@ def truck__add(order, truck_idx):
 
     truck["orders"].append(
         {
-            {
-                "doctype": "Sales Orders Table",
-                "parent": truck["name"],
-                "parenttype": "Clubbed Order",
-                "parentfield": "orders",
-                "sales_order": order["name"],
-                "qty": order["qty"],
-                "city": order["city"],
-                "state": order["state"],
-                "order_time": order["timestamp"],
-            }
+            "sales_order": order["name"],
+            "qty": order["qty"],
+            "city": order["city"],
+            "state": order["state"],
+            "order_time": order["timestamp"],
         }
     )
 
@@ -439,8 +433,10 @@ def truck__check_and_fulfill(truck_idx, l_ts):
     trucks[truck_idx]["active"] = False
     return True
 
+
 def engine__get_orders(l_ts):
-    query = """SELECT 
+
+    query = f"""SELECT 
         customer_ AS customer,
         JSON_ARRAYAGG(
             JSON_OBJECT(
@@ -496,7 +492,7 @@ def engine__check_constraints(order, truck):
     if len(trucks["locs"].union({order["location_id"]})) > 2:
         return False
 
-    if len(truck["customers"].union({order["customer_"]})) > 2:
+    if len(truck["customer"].union({order["customer_"]})) > 2:
         return False
 
     dps = list(truck["delivery_points"])
@@ -540,7 +536,6 @@ def engine_label_old_orders_to_unserviceable(l_ts):
 def engine__main(l_ts):
     engine_label_old_orders_to_unserviceable(l_ts)
     sales_orders = engine__get_orders(l_ts)
-
     for customer, orders in sales_orders.items():
         for order in orders:
             if (
@@ -584,19 +579,21 @@ def engine__main(l_ts):
             if len(trucks) == 0:
                 trucks.append(
                     {
-                        "timestamp": order["timestamp"],
+                        "timestamp": frappe.utils.get_datetime(order["timestamp"]),
                         "channel": order["channel"],
                         "plant": order["plant"],
                         "available_vehicles": available_vehicles,
                         "locs": set(),
                         "tehsils": set(),
                         "delivery_points": set(),
-                        "customers": set(),
+                        "customer": set(),
                         "qty": 0,
-                        "active": True
+                        "active": True,
+                        "orders": []
                     }
                 )
-                truck__add(order, len(trucks) - 1)
+                truck_idx = len(trucks) - 1
+                truck__add(order, truck_idx)
                 truck__check_and_fulfill(truck_idx, l_ts)
                 continue
 
@@ -615,16 +612,17 @@ def engine__main(l_ts):
             if not truck_found:
                 trucks.append(
                     {
-                        "timestamp": order["timestamp"],
+                        "timestamp": frappe.utils.get_datetime(order["timestamp"]),
                         "channel": order["channel"],
                         "plant": order["plant"],
                         "available_vehicles": available_vehicles,
                         "locs": set(),
                         "tehsils": set(),
                         "delivery_points": set(),
-                        "customers": set(),
+                        "customer": set(),
                         "qty": 0,
-                        "active": True
+                        "active": True,
+                        "orders": []
                     }
                 )
                 truck_idx = len(trucks) - 1
