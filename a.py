@@ -381,8 +381,39 @@ def truck__check_and_fulfill(truck_idx, l_ts):
     #     },
     # )
 
+    new_truck = frappe.get_doc(
+        {
+            "doctype": "Clubbed Order",
+            "channel": truck["channel"],
+            "plant": truck["plant"],
+            "available_vehicles": json.dumps(list(truck["available_vehicles"])),
+            "qty": truck["qty"],
+            "locs": json.dumps(list(truck["locs"])),
+            "tehsils": json.dumps(list(truck["tehsils"])),
+            "delivery_points": json.dumps(list(truck["delivery_points"])),
+            "customer": json.dumps(list(truck["customer"])),
+            "fulfilled": True,
+            "status": "Completed",
+            "fulfillment_time": l_ts,
+            "vehicle_size": vehicle_size
+        }
+    )
+    new_truck.insert(ignore_permissions=True)
+    truck["name"] = new_truck.name
+
     tss = []
     for order in truck["orders"]:
+        new_truck.append(
+            "orders",
+            {
+                "sales_order": order["name"],
+                "qty": order["qty"],
+                "city": order["city"],
+                "state": order["state"],
+                "order_time": order["timestamp"]
+            }
+        )
+
         frappe.db.set_value(
             "Sales Order",
             order["name"],
@@ -398,11 +429,12 @@ def truck__check_and_fulfill(truck_idx, l_ts):
     max_ts = max(tss)  # l_ts
     o_count = len(truck["orders"])
 
+    new_truck.timestamp = min_ts
+    new_truck.latest_timestamp = max_ts
+    new_truck.order_count = o_count
+    new_truck.save()
+
     trucks[truck_idx]["active"] = False
-
-    # TODO
-    # Create "Clubbed Order" with Completed and all sales orders
-
     return True
 
 
