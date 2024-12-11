@@ -560,14 +560,18 @@ def engine__main(l_ts):
                         "delivery_points": set(),
                         "customers": set(),
                         "qty": 0,
+                        "active": True
                     }
                 )
                 truck__add(order, len(trucks) - 1)
+                truck__check_and_fulfill(truck_idx, l_ts)
                 continue
 
             truck_found = False
             truck_idx = None
             for idx, truck in enumerate(trucks):
+                if not truck["active"]:
+                    continue
                 if not engine__check_constraints(order, truck):
                     continue
 
@@ -587,6 +591,7 @@ def engine__main(l_ts):
                         "delivery_points": set(),
                         "customers": set(),
                         "qty": 0,
+                        "active": True
                     }
                 )
                 truck_idx = len(trucks) - 1
