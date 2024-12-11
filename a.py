@@ -204,7 +204,7 @@ def get_available_vehicles_by_plant_and_distance(plant, dp):
 def order__get_available_vehicles(order):
     vehicles = set(TALUKA_VEHICLE_SIZE_MATRIX[order.tehsil]["vehicles"])
     vehicles_by_plant = set(
-        get_available_vehicles_by_plant_and_distance(order.plant, order.delivery_point)
+        get_available_vehicles_by_plant_and_distance(order["plant"], order["delivery_point"])
     )
     return vehicles.intersection(vehicles_by_plant)
 
@@ -242,11 +242,11 @@ def order__split(order, available_vehicles):
         )
     ]
 
-    qties = split(order.qty, vehicle_wt_range)
+    qties = split(order["qty"], vehicle_wt_range)
     if len(qties) == 0:
         frappe.db.set_value(
             "Sales Order",
-            order.name,
+            order["name"],
             {
                 "status": "Unserviceable",
                 "is_unserviceable": True,
@@ -259,26 +259,26 @@ def order__split(order, available_vehicles):
     for q in qties:
         new_so = frappe.get_doc(
             {
-                "so_id": order.so_id,
+                "so_id": order["so_id"],
                 "doctype": "Sales Order",
-                "timestamp": order.timestamp,
-                "city": order.city,
-                "district": order.district,
-                "tehsil": order.tehsil,
-                "delivery_point": order.delivery_point,
-                "state": order.state,
-                "product": order.product,
-                "order_qty": order.order_qty,
+                "timestamp": order["timestamp"],
+                "city": order["city"],
+                "district": order["district"],
+                "tehsil": order["tehsil"],
+                "delivery_point": order["delivery_point"],
+                "state": order["state"],
+                "product": order["product"],
+                "order_qty": order["order_qty"],
                 "qty": q,
-                "channel": order.channel,
-                "plant": order.plant,
-                "location_id": order.location_id,
-                "customer_": order.customer_,
+                "channel": order["channel"],
+                "plant": order["plant"],
+                "location_id": order["location_id"],
+                "customer_": order["customer_"],
             }
         )
         new_so.insert()
 
-    frappe.delete_doc("Sales Order", order.name)
+    frappe.delete_doc("Sales Order", order["name"])
 
 
 def truck__add(order, truck_idx):
@@ -287,25 +287,25 @@ def truck__add(order, truck_idx):
     truck_available_vehicles = truck["available_vehicles"]
     available_vehicles = list(
         truck_available_vehicles.intersection(
-            set(TALUKA_VEHICLE_SIZE_MATRIX[order.tehsil]["vehicles"])
+            set(TALUKA_VEHICLE_SIZE_MATRIX[order["tehsil"]]["vehicles"])
         )
     )
     truck["available_vehicles"] = available_vehicles
 
     locs = truck["locs"]
-    locs.add(order.location_id)
+    locs.add(order["location_id"])
     truck["locs"] = locs
 
     tehsils = truck["tehsils"]
-    tehsils.add(order.tehsil)
+    tehsils.add(order["tehsil"])
     truck["tehsils"] = tehsils
 
     dps = truck["delivery_points"]
-    dps.add(order.delivery_point)
+    dps.add(order["delivery_point"])
     truck["delivery_points"] = dps
 
     customers = truck["customer"]
-    customers.add(order.customer_)
+    customers.add(order["customer_"])
     truck["customer"] = customers
 
     truck["qty"] = float(truck["qty"]) + float(order["qty"])
@@ -314,14 +314,14 @@ def truck__add(order, truck_idx):
         {
             {
                 "doctype": "Sales Orders Table",
-                "parent": truck.name,
+                "parent": truck["name"],
                 "parenttype": "Clubbed Order",
                 "parentfield": "orders",
-                "sales_order": order.name,
-                "qty": order.qty,
-                "city": order.city,
-                "state": order.state,
-                "order_time": order.timestamp,
+                "sales_order": order["name"],
+                "qty": order["qty"],
+                "city": order["city"],
+                "state": order["state"],
+                "order_time": order["timestamp"],
             }
         }
     )
@@ -447,21 +447,21 @@ def engine__get_orders(l_ts):
 
 def engine__check_constraints(order, truck):
 
-    if order.plant != truck["plant"]:
+    if order["plant"] != truck["plant"]:
         return False
 
-    if order.channel != truck["channel"]:
+    if order["channel"] != truck["channel"]:
         return False
 
-    if len(trucks["locs"].union({order.location_id})) > 2:
+    if len(trucks["locs"].union({order["location_id"]})) > 2:
         return False
 
-    if len(truck["customers"].union({order.customer_})) > 2:
+    if len(truck["customers"].union({order["customer_"]})) > 2:
         return False
 
     dps = list(truck["delivery_points"])
-    distance = calculate_dp_distance(order.delivery_point, dps[0])
-    allowable_distance = DISTRICT_CLUBBING_DISTANCE_MATRIX[order.district]
+    distance = calculate_dp_distance(order["delivery_point"], dps[0])
+    allowable_distance = DISTRICT_CLUBBING_DISTANCE_MATRIX[order["district"]]
     if order.tehsil in truck["tehsils"]:
         allowable_distance = allowable_distance + SAME_TEHSIL_EXTRA_ALLOWABLE_DISTANCE
 
@@ -469,10 +469,10 @@ def engine__check_constraints(order, truck):
         return False
 
     available_vehicles = truck["available_vehicles"].intersection(
-        TALUKA_VEHICLE_SIZE_MATRIX[order.tehsil]
+        TALUKA_VEHICLE_SIZE_MATRIX[order["tehsil"]]
     )
 
-    if truck.qty + order.qty > VEHICLE_TYPES[max(available_vehicles)]["max"]:
+    if truck["qty"] + order["qty"] > VEHICLE_TYPES[max(available_vehicles)]["max"]:
         return False
 
     return True
@@ -486,22 +486,32 @@ def engine__fulfill_and_eject(l_ts):
 
 # TODO    old orders less tha l_ts - 120 mins to unserviceable
 def engine_label_old_orders_to_unserviceable(l_ts):
-
-    pass
-
+    orders = engine__get_orders(l_ts)
+    delay_point = frappe.utils.add_to_date(l_ts, minutes= -115)
+    for customer, sales_orders in orders.items():
+        for order in sales_orders:
+            timestamp = frappe.utils.get_datetime(order["timestamp"])
+            if timestamp < delay_point:
+                frappe.db.set_value("Sales Order", order["name"], {
+                    "status": "Unserviceable",
+                    "is_unserviceable": True,
+                    "unserviceable_remarks": "TIME_LIMIT_EXCEEDED",
+                    "clubbed_order": ""
+                })
 
 def engine__main(l_ts):
+    engine_label_old_orders_to_unserviceable(l_ts)
     sales_orders = engine__get_orders(l_ts)
     for order in sales_orders:
         # TODO dp filter here
         if (
-            order.tehsil not in TALUKA_VEHICLE_SIZE_MATRIX
-            or order.district not in DISTRICT_CLUBBING_DISTANCE_MATRIX
-            or order.delivery_point not in DP_LAT_LNG_MASTER
+            order["tehsil"] not in TALUKA_VEHICLE_SIZE_MATRIX
+            or order["district"] not in DISTRICT_CLUBBING_DISTANCE_MATRIX
+            or order["delivery_point"] not in DP_LAT_LNG_MASTER
         ):
             frappe.db.set_value(
                 "Sales Order",
-                order.name,
+                order["name"],
                 {
                     "status": "Unserviceable",
                     "is_unserviceable": True,
@@ -515,7 +525,7 @@ def engine__main(l_ts):
         if len(available_vehicles) == 0:
             frappe.db.set_value(
                 "Sales Order",
-                order.name,
+                order["name"],
                 {
                     "status": "Unserviceable",
                     "is_unserviceable": True,
@@ -526,7 +536,7 @@ def engine__main(l_ts):
             continue
 
         mx_weight = VEHICLE_TYPES[max(available_vehicles)]["max"]
-        if order.qty > mx_weight:
+        if order["qty"] > mx_weight:
             order__split(order, available_vehicles)
             continue
 
@@ -535,9 +545,9 @@ def engine__main(l_ts):
         if len(trucks) == 0:
             trucks.append(
                 {
-                    "timestamp": order.timestamp,
-                    "channel": order.channel,
-                    "plant": order.plant,
+                    "timestamp": order["timestamp"],
+                    "channel": order["channel"],
+                    "plant": order["plant"],
                     "available_vehicles": available_vehicles,
                     "locs": set(),
                     "tehsils": set(),
@@ -562,9 +572,9 @@ def engine__main(l_ts):
         if not truck_found:
             trucks.append(
                 {
-                    "timestamp": order.timestamp,
-                    "channel": order.channel,
-                    "plant": order.plant,
+                    "timestamp": order["timestamp"],
+                    "channel": order["channel"],
+                    "plant": order["plant"],
                     "available_vehicles": available_vehicles,
                     "locs": set(),
                     "tehsils": set(),
@@ -578,7 +588,6 @@ def engine__main(l_ts):
         truck__add(order, truck_idx)
 
     engine__fulfill_and_eject(l_ts)
-    engine_label_old_orders_to_unserviceable(l_ts)
 
 
 engine_run_time = frappe.form_dict.l_ts
