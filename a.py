@@ -329,55 +329,6 @@ def truck__add(order, truck_idx):
     trucks[truck_idx] = truck
 
 
-def truck__get_truck_order(truck):
-    query = f"""
-    SELECT order_time, sales_order
-    FROM `tabSales Orders Table` WHERE
-    parent = '{truck.name}' AND
-    parenttype = 'Clubbed Order' AND
-    parentfield = 'orders'
-    ORDER BY order_time DESC
-    """
-    query_result = frappe.db.sql(query, as_dict=True)
-    return query_result
-
-
-def truck__check_and_eject(truck, l_ts):
-
-    orders = truck__get_truck_order(truck)
-    check = False
-    for order in orders:
-        delay = divmod((l_ts - order.order_time).total_seconds(), 60)[0]
-        if delay > HARD_STOP_TIME:
-            check = True
-            break
-
-    if not check:
-        return
-
-    for order in orders:
-        delay = divmod((l_ts - order.order_time).total_seconds(), 60)[0]
-        if delay <= HARD_STOP_TIME:
-            frappe.db.set_value(
-                "Sales Order",
-                order.sales_order,
-                {"status": "Confirmed", "clubbed_order": ""},
-            )
-        else:
-            frappe.db.set_value(
-                "Sales Order",
-                order.sales_order,
-                {
-                    "status": "Unserviceable",
-                    "is_unserviceable": True,
-                    "unserviceable_remarks": "TIME_LIMIT_EXCEEDED",
-                    "clubbed_order": "",
-                },
-            )
-
-    frappe.delete_doc("Clubbed Order", truck.name)
-
-
 def truck__check_and_fulfill(truck, l_ts):
     delay = divmod(((l_ts) - (truck["timestamp"])).total_seconds(), 60)[0]
     allowable_vehicles_by_time = []
@@ -397,7 +348,9 @@ def truck__check_and_fulfill(truck, l_ts):
             "12-25 MT",
         }
 
-    vehicles = sorted(truck["available_vehicles"].intersection(allowable_vehicles_by_time))
+    vehicles = sorted(
+        truck["available_vehicles"].intersection(allowable_vehicles_by_time)
+    )
 
     vehicle_size = None
     for i in vehicles:
@@ -424,16 +377,25 @@ def truck__check_and_fulfill(truck, l_ts):
     #         "fulfillment_time": l_ts,
     #     },
     # )
+    # TODO
     # Create "Clubbed Order" with Completed and all sales orders
 
-    orders = truck__get_truck_order(truck)
-
-    for order in orders:
+    for order in truck["orders"]:
         frappe.db.set_value(
             "Sales Order",
-            order.sales_order,
-            {"status": "Clubbed", "clubbed_order": truck.name, "clubbing_time": l_ts},
+            order["name"],
+            {
+                "status": "Clubbed",
+                "clubbed_order": truck["name"],
+                "clubbing_time": l_ts,
+            },
         )
+
+    # TODO  engine_set_truck_timestamp,   set  {
+    #     "timestamp": min_order_time,
+    #     "latest_timestamp": max_order_time,
+    #     "order_count": order_count,
+    # },
     return True
 
 
@@ -517,46 +479,14 @@ def engine__check_constraints(order, truck):
 
 
 def engine__fulfill_and_eject(l_ts):
-    global TRUCKS
-    for truck in TRUCKS:
-        if truck__check_and_fulfill(truck, l_ts):
-            pass
-        else:
-            truck__check_and_eject(truck, l_ts)
+    global trucks
+    for truck in trucks:
+        truck__check_and_fulfill(truck, l_ts)
 
 
-def engine_set_truck_timestamp(truck):
-    result = frappe.db.sql(
-        """
-        SELECT 
-            COUNT(*) as order_count,
-            MIN(order_time) AS min_order_time, 
-            MAX(order_time) AS max_order_time
-        FROM 
-            `tabSales Orders Table`
-        WHERE 
-            parent = %s
-        """,
-        (f"{truck.name}",),
-        as_dict=True,
-    )
+# TODO    old orders less tha l_ts - 120 mins to unserviceable
+def engine_label_old_orders_to_unserviceable(l_ts):
 
-    min_order_time = result[0].get("min_order_time")
-    max_order_time = result[0].get("max_order_time")
-    order_count = result[0].get("order_count")
-    if min_order_time or max_order_time:
-        frappe.db.set_value(
-            "Clubbed Order",
-            truck.name,
-            {
-                "timestamp": min_order_time,
-                "latest_timestamp": max_order_time,
-                "order_count": order_count,
-            },
-        )
-
-
-def engine_label_old_orders_to_unserviceable():
     pass
 
 
@@ -605,7 +535,6 @@ def engine__main(l_ts):
         if len(trucks) == 0:
             trucks.append(
                 {
-                    "doctype": "Clubbed Order",
                     "timestamp": order.timestamp,
                     "channel": order.channel,
                     "plant": order.plant,
@@ -613,38 +542,43 @@ def engine__main(l_ts):
                     "locs": set(),
                     "tehsils": set(),
                     "delivery_points": set(),
-                    "customer": set(),
+                    "customers": set(),
                     "qty": 0,
                 }
             )
-            truck__add(order, trucks[-1])
-            engine_set_truck_timestamp(new_truck)
+            truck__add(order, len(trucks) - 1)
             continue
 
         truck_found = False
-        for truck in trucks:
+        truck_idx = None
+        for idx, truck in enumerate(trucks):
             if not engine__check_constraints(order, truck):
                 continue
+
             truck_found = True
+            truck_idx = idx
             break
 
         if not truck_found:
-            truck = frappe.get_doc(
+            trucks.append(
                 {
-                    "doctype": "Clubbed Order",
                     "timestamp": order.timestamp,
                     "channel": order.channel,
                     "plant": order.plant,
-                    "available_vehicles": json.dumps(list(available_vehicles)),
+                    "available_vehicles": available_vehicles,
+                    "locs": set(),
+                    "tehsils": set(),
+                    "delivery_points": set(),
+                    "customers": set(),
+                    "qty": 0,
                 }
             )
-            truck.insert(ignore_permissions=True)
+            truck_idx = len(trucks) - 1
 
-        truck__add(order, truck)
-        engine_set_truck_timestamp(truck)
-        engine_label_old_orders_to_unserviceable()
+        truck__add(order, truck_idx)
 
     engine__fulfill_and_eject(l_ts)
+    engine_label_old_orders_to_unserviceable(l_ts)
 
 
 engine_run_time = frappe.form_dict.l_ts
