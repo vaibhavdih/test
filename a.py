@@ -399,20 +399,21 @@ def truck__check_and_fulfill(truck_idx, l_ts):
         }
     )
     new_truck.insert(ignore_permissions=True)
-    truck["name"] = new_truck.name
 
     tss = []
     for order in truck["orders"]:
-        new_truck.append(
-            "orders",
-            {
-                "sales_order": order["name"],
-                "qty": order["qty"],
-                "city": order["city"],
-                "state": order["state"],
-                "order_time": order["timestamp"]
-            }
-        )
+        new_child_order = frappe.get_doc({
+            "doctype": "Sales Orders Table",
+            "parent": new_truck.name,
+            "parenttype": "Clubbed Order",
+            "parentfield": "orders",
+            "sales_order": order["name"],
+            "qty": order["qty"],
+            "city": order["city"],
+            "state": order["state"],
+            "order_time": order["timestamp"]
+        })
+        new_child_order.insert(ignore_permissions=True)
 
         frappe.db.set_value(
             "Sales Order",
@@ -429,14 +430,14 @@ def truck__check_and_fulfill(truck_idx, l_ts):
     max_ts = max(tss)  # l_ts
     o_count = len(truck["orders"])
 
-    new_truck.timestamp = min_ts
-    new_truck.latest_timestamp = max_ts
-    new_truck.order_count = o_count
-    new_truck.save()
+    frappe.db.set_value("Clubbed Order", new_truck.name, {
+        "timestamp": min_ts,
+        "latest_timestamp": max_ts,
+        "order_count": o_count
+    })
 
     trucks[truck_idx]["active"] = False
     return True
-
 
 def engine__get_orders(l_ts):
     query = """SELECT 
