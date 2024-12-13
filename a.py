@@ -287,11 +287,9 @@ def truck__add(order, truck_idx):
     truck = trucks[truck_idx]
 
     truck_available_vehicles = truck["available_vehicles"]
-    available_vehicles = list(
-        truck_available_vehicles.intersection(
+    available_vehicles = truck_available_vehicles.intersection(
             set(TALUKA_VEHICLE_SIZE_MATRIX[order["tehsil"]]["vehicles"])
         )
-    )
     truck["available_vehicles"] = available_vehicles
 
     locs = truck["locs"]
@@ -322,9 +320,6 @@ def truck__add(order, truck_idx):
         }
     )
 
-    trucks[truck_idx] = truck
-
-
 def truck__check_and_fulfill(truck_idx, l_ts):
     truck = trucks[truck_idx]
     delay = divmod(((l_ts) - (truck["timestamp"])).total_seconds(), 60)[0]
@@ -344,11 +339,11 @@ def truck__check_and_fulfill(truck_idx, l_ts):
             "25-31 MT",
             "12-25 MT",
         }
-
+    
     vehicles = sorted(
         truck["available_vehicles"].intersection(allowable_vehicles_by_time)
     )
-
+    
     vehicle_size = None
     for i in vehicles:
         threshold = 0.95
@@ -363,17 +358,6 @@ def truck__check_and_fulfill(truck_idx, l_ts):
 
     if vehicle_size is None:
         return False
-
-    # frappe.db.set_value(
-    #     "Clubbed Order",
-    #     truck.name,
-    #     {
-    #         "vehicle_size": vehicle_size,
-    #         "fulfilled": True,
-    #         "status": "Completed",
-    #         "fulfillment_time": l_ts,
-    #     },
-    # )
 
     new_truck = frappe.get_doc(
         {
@@ -393,7 +377,7 @@ def truck__check_and_fulfill(truck_idx, l_ts):
         }
     )
     new_truck.insert(ignore_permissions=True)
-
+    
     tss = []
     for order in truck["orders"]:
         new_child_order = frappe.get_doc({
@@ -401,24 +385,24 @@ def truck__check_and_fulfill(truck_idx, l_ts):
             "parent": new_truck.name,
             "parenttype": "Clubbed Order",
             "parentfield": "orders",
-            "sales_order": order["name"],
+            "sales_order": order["sales_order"],
             "qty": order["qty"],
             "city": order["city"],
             "state": order["state"],
-            "order_time": order["timestamp"]
+            "order_time": order["order_time"]
         })
         new_child_order.insert(ignore_permissions=True)
 
         frappe.db.set_value(
             "Sales Order",
-            order["name"],
+            order["sales_order"],
             {
                 "status": "Clubbed",
-                "clubbed_order": truck["name"],
+                "clubbed_order": new_truck.name,
                 "clubbing_time": l_ts,
             },
         )
-        tss.append(order["timestamp"])
+        tss.append(order["order_time"])
 
     min_ts = min(tss)  # ts
     max_ts = max(tss)  # l_ts
@@ -489,7 +473,7 @@ def engine__check_constraints(order, truck):
     if order["channel"] != truck["channel"]:
         return False
 
-    if len(trucks["locs"].union({order["location_id"]})) > 2:
+    if len(truck["locs"].union({order["location_id"]})) > 2:
         return False
 
     if len(truck["customer"].union({order["customer_"]})) > 2:
@@ -538,6 +522,7 @@ def engine__main(l_ts):
     sales_orders = engine__get_orders(l_ts)
     for customer, orders in sales_orders.items():
         for order in orders:
+            
             if (
                 order["tehsil"] not in TALUKA_VEHICLE_SIZE_MATRIX
                 or order["district"] not in DISTRICT_CLUBBING_DISTANCE_MATRIX
